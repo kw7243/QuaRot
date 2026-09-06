@@ -16,6 +16,7 @@ supported_models = [
             'meta-llama/Llama-2-13b-hf',
             'meta-llama/Llama-2-70b-hf',
             'meta-llama/Meta-Llama-3-8B',
+            'meta-llama/Llama-3.2-3B',
             'meta-llama/Meta-Llama-3-70B',
             'facebook/opt-125m'
             ]
@@ -188,6 +189,10 @@ def parser_gen():
     )
 
     args = parser.parse_args()
+    if args.hf_token is not None:
+        raise ValueError(
+            "Do not pass a Hugging Face token on the command line; use the configured credential store"
+        )
     if args.lm_eval:
         from lm_eval import tasks
         from lm_eval import utils as lm_eval_utils

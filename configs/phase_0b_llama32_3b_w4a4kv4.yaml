@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "source": {
+    "upstream_url": "https://github.com/spcl/QuaRot",
+    "fork_url": "https://github.com/kw7243/QuaRot",
+    "commit": "5008669b08c1f11f9b64d52d16fddd47ca754c5a",
+    "license": "Apache-2.0"
+  },
+  "model": {
+    "id": "meta-llama/Llama-3.2-3B",
+    "revision": "13afe5124825b4f3751f836b40dafda64c1ed062",
+    "tokenizer_revision": "13afe5124825b4f3751f836b40dafda64c1ed062",
+    "license": "llama3.2",
+    "dtype": "float16",
+    "sequence_length": 2048,
+    "reported_fp16_wikitext2_ppl": 7.81,
+    "reported_result_source": "ReSpinQuant arXiv:2604.11080v2, Table 1"
+  },
+  "dataset": {
+    "id": "Salesforce/wikitext",
+    "config": "wikitext-2-raw-v1",
+    "revision": "b08601e04326c79dfdd32d625aee71d232d685c3",
+    "split": "test",
+    "join": "double_newline"
+  },
+  "calibration": {
+    "dataset_id": "Salesforce/wikitext",
+    "dataset_config": "wikitext-2-raw-v1",
+    "dataset_revision": "b08601e04326c79dfdd32d625aee71d232d685c3",
+    "split": "train",
+    "samples": 128,
+    "sequence_length": 2048,
+    "seed": 0,
+    "sampling": "QuaRot contiguous random token windows"
+  },
+  "quantization": {
+    "weight_method": "RTN",
+    "weight_bits": 4,
+    "activation_bits": 4,
+    "key_bits": 4,
+    "value_bits": 4,
+    "weight_group_size": 128,
+    "activation_group_size": 128,
+    "key_group_size": 128,
+    "value_group_size": 128,
+    "symmetric": true,
+    "weight_clipping": false,
+    "activation_clip_ratio": 1.0,
+    "key_clip_ratio": 1.0,
+    "value_clip_ratio": 1.0,
+    "fp16_exclusions": [
+      "model.embed_tokens",
+      "model.norm",
+      "lm_head"
+    ]
+  },
+  "conditions": [
+    {
+      "name": "fp16",
+      "rotate": false,
+      "weight_bits": 16,
+      "activation_bits": 16,
+      "key_bits": 16,
+      "value_bits": 16
+    },
+    {
+      "name": "rtn_w4a4kv4_g128",
+      "rotate": false,
+      "weight_bits": 4,
+      "activation_bits": 4,
+      "key_bits": 4,
+      "value_bits": 4
+    },
+    {
+      "name": "quarot_w4a4kv4_g128",
+      "rotate": true,
+      "weight_bits": 4,
+      "activation_bits": 4,
+      "key_bits": 4,
+      "value_bits": 4
+    }
+  ],
+  "evaluation": {
+    "batch_size": 1,
+    "seed": 0,
+    "deterministic_reruns": 2,
+    "ppl_rerun_tolerance": 0.02,
+    "fp16_source_tolerance_absolute": 0.1,
+    "fp16_source_tolerance_relative": 0.02,
+    "quarot_equivalence_relative_l2_tolerance": 0.00003,
+    "quarot_equivalence_max_absolute_tolerance": 0.0002
+  },
+  "storage": {
+    "research_root": "/data/vision/torralba/u/kwen1",
+    "scratch_root": "/data/scratch-fast/kwen1",
+    "hf_home": "/data/scratch-fast/kwen1/.cache/huggingface",
+    "pip_cache": "/data/scratch-fast/kwen1/.cache/pip",
+    "credential_path": "/afs/csail.mit.edu/u/k/kwen1/.cache/huggingface/token",
+    "environment": "/data/scratch-fast/kwen1/absorbable-transformer-symmetries/envs/quarot-phase0b-py310-cu121-r1"
+  },
+  "slurm": {
+    "account": "vision-torralba-urops-meng",
+    "qos": "vision-torralba-interactive",
+    "partition": "vision-torralba-rtx3090",
+    "nodes": 1,
+    "gpus": 1,
+    "cpus_per_task": 8,
+    "memory": "32G",
+    "time": "05:00:00"
+  }
+}

@@ -225,18 +225,14 @@ class ActQuantWrapper(torch.nn.Module):
                 x = hadamard_utils.matmul_hadU_cuda(x, self.had_K, self.K)
             
         elif self.online_partial_had:
-            # todo: implement this in QAttention to avoid reshaping!
-            
             if self.fp32_had:
                 x = x.float()
-                
             init_shape = x.shape
-            if self.K == 1:
-                x = fast_hadamard_transform.hadamard_transform(x.reshape(-1, init_shape[-1]//self.had_dim, self.had_dim).transpose(1, 2),
-                                                               scale=1/math.sqrt(init_shape[-1]//self.had_dim)).transpose(1, 2)
-            else:
-                x = (self.had_K.to(x.dtype) @ x.reshape(-1, init_shape[-1]//self.had_dim, self.had_dim)) / math.sqrt(init_shape[-1]//self.had_dim)
-                
+            # Apply the exact generalized Hadamard across attention heads.
+            # The original K>1 branch assumes K == num_heads and is invalid for
+            # Llama-3.2-3B's 24 = 12 * 2 heads.
+            by_head = x.reshape(-1, init_shape[-1] // self.had_dim, self.had_dim)
+            x = hadamard_utils.matmul_hadU(by_head.transpose(1, 2)).transpose(1, 2)
             if self.fp32_had:
                 x = x.to(x_dtype)
             x = x.reshape(init_shape)

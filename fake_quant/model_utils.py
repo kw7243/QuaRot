@@ -38,12 +38,27 @@ def get_layers(model):
 
 
 def get_llama(model_name, hf_token):
+    if hf_token is not None:
+        raise ValueError("command-line Hugging Face tokens are forbidden")
     torch.nn.init.kaiming_uniform_ = skip
     torch.nn.init.uniform_ = skip
     torch.nn.init.normal_ = skip
-    model = transformers.LlamaForCausalLM.from_pretrained(model_name, torch_dtype='auto',
-                                                          use_auth_token=hf_token,
-                                                          low_cpu_mem_usage=True)
+    revision = os.environ["PHASE0B_MODEL_REVISION"]
+    dtype_name = os.environ.get("PHASE0B_TORCH_DTYPE", "float16")
+    dtype = getattr(torch, dtype_name)
+    model = transformers.LlamaForCausalLM.from_pretrained(
+        model_name,
+        revision=revision,
+        torch_dtype=dtype,
+        token=True,
+        low_cpu_mem_usage=True,
+    )
+    # Llama 3.2 ties embed_tokens and lm_head. QuaRot independently transforms
+    # them, so preserve the initial function while giving each boundary its own
+    # Parameter, as the original Llama 2/3 code path assumed.
+    if model.lm_head.weight.data_ptr() == model.model.embed_tokens.weight.data_ptr():
+        model.lm_head.weight = torch.nn.Parameter(model.lm_head.weight.detach().clone())
+        model.config.tie_word_embeddings = False
     model.seqlen = 2048
     logging.info('---> Loading {} Model with seq_len: {}'.format(model_name, model.seqlen))
     return model

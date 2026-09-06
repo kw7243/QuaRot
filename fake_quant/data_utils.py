@@ -1,20 +1,32 @@
 import datasets
+import os
 import random
 import transformers
 
 def get_wikitext2(nsamples, seed, seqlen, model, hf_token, eval_mode=False):
-    
-    if hf_token is None:
-        tokenizer = transformers.AutoTokenizer.from_pretrained(model, use_fast=False)
-    else:
-        tokenizer = transformers.AutoTokenizer.from_pretrained(model, use_fast=False, use_auth_token=hf_token)
+    if hf_token is not None:
+        raise ValueError("command-line Hugging Face tokens are forbidden")
+    model_revision = os.environ["PHASE0B_TOKENIZER_REVISION"]
+    dataset_revision = os.environ["PHASE0B_DATASET_REVISION"]
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+        model,
+        revision=model_revision,
+        use_fast=False,
+        token=True,
+    )
         
     if eval_mode:
-        testdata = datasets.load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
+        testdata = datasets.load_dataset(
+            'Salesforce/wikitext', 'wikitext-2-raw-v1',
+            revision=dataset_revision, split='test'
+        )
         testenc = tokenizer("\n\n".join(testdata['text']), return_tensors='pt')
         return testenc
     else:
-        traindata = datasets.load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
+        traindata = datasets.load_dataset(
+            'Salesforce/wikitext', 'wikitext-2-raw-v1',
+            revision=dataset_revision, split='train'
+        )
         trainenc = tokenizer("\n\n".join(traindata['text']), return_tensors='pt')    
         random.seed(seed)
         trainloader = []
