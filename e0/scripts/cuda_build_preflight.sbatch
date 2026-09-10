@@ -99,7 +99,7 @@ source_tree=$(git --no-optional-locks -C "$source_repo" rev-parse 'HEAD^{tree}')
 source_status=$(git --no-optional-locks -C "$source_repo" status --porcelain --untracked-files=all)
 source_submodules=$(git --no-optional-locks -C "$source_repo" submodule status --recursive)
 [[ "$source_commit" == "$expected_commit" ]]
-[[ "$source_status" == "?? REPRODUCIBILITY_METADATA.json" ]]
+[[ -z "$source_status" || "$source_status" == "?? REPRODUCIBILITY_METADATA.json" ]]
 [[ "$(pwd -P)" == "$(realpath "$source_repo")" ]]
 if grep -Eq '^[-+U]' <<<"$source_submodules"; then
   echo "source submodule state is incomplete or mismatched" >&2
