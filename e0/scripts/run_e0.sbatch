@@ -18,11 +18,8 @@ scratch_root=/data/scratch-fast/kwen1/absorbable-transformer-symmetries
 stage=${1:?validated stage required}
 attempt_dir=${2:?durable attempt directory required}
 contract=${3:?staged contract required}
+preflight_manifest=${4:?successful CPU build preflight manifest required}
 results_dir=$attempt_dir/results
-environment=$scratch_root/envs/quarot-e0-py310-cu121-r2
-environment_source=$scratch_root/envs/quarot-phase0b-py310-cu121-r1
-micromamba=/data/scratch-fast/kwen1/micromamba/bin/micromamba
-mamba_root=/data/scratch-fast/kwen1/micromamba/root
 cache_root=$scratch_root/cache/e0
 running_state=$attempt_dir/state.running.json
 final_state=$attempt_dir/state.final.json
@@ -30,8 +27,6 @@ tmp_root=${SLURM_TMPDIR:-/tmp/absym-e0-${SLURM_JOB_ID:?SLURM_JOB_ID required}}
 failure_command=unknown
 experiment_started=false
 export PATH LC_ALL LANG
-MAMBA_ROOT_PREFIX=$mamba_root
-export MAMBA_ROOT_PREFIX
 
 write_failure() {
   local return_code=$1
@@ -77,9 +72,11 @@ trap 'write_failure $?' EXIT
 [[ -f "$stage/REPRODUCIBILITY_METADATA.json" ]]
 [[ -f "$contract" ]]
 [[ -f "$stage/e0/scripts/e0_benchmark.py" ]]
+[[ -f "$stage/e0/scripts/finalize_e0.py" ]]
+[[ -f "$stage/e0/scripts/verify_cuda_preflight.py" ]]
 [[ ! -e "$results_dir" ]]
-[[ -x "$micromamba" ]]
-[[ -d "$environment_source" ]]
+[[ "$preflight_manifest" == "$research_root/manifests/"* ]]
+[[ -f "$preflight_manifest" ]]
 
 mkdir -p "$tmp_root" "$cache_root/huggingface" "$cache_root/pip" "$cache_root/torch_extensions"
 HOME=$tmp_root/home
@@ -87,18 +84,30 @@ TMPDIR=$tmp_root/tmp
 mkdir -p "$HOME" "$TMPDIR"
 export HOME TMPDIR
 
+preflight_values=$(python3 "$stage/e0/scripts/verify_cuda_preflight.py" \
+  "$preflight_manifest" "$stage" "$attempt_dir/preflight-verification.json")
+IFS='|' read -r environment build_source preflight_manifest_sha256 <<<"$preflight_values"
+[[ -x "$environment/bin/python" ]]
+[[ -x "$environment/bin/nvcc" ]]
+[[ -d "$build_source" ]]
+
 job_descriptor=$(scontrol show job -o "$SLURM_JOB_ID")
 gpu_inventory=$(nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv,noheader)
 visible_count=$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)
 [[ "$visible_count" -eq 1 ]]
 
-python3 - "$running_state" "$stage" "$attempt_dir" "$contract" "$environment" "$TMPDIR" "$job_descriptor" "$gpu_inventory" "$*" <<'PY'
+python3 - "$running_state" "$stage" "$attempt_dir" "$contract" "$environment" \
+  "$build_source" "$preflight_manifest" "$preflight_manifest_sha256" "$TMPDIR" \
+  "$job_descriptor" "$gpu_inventory" "$*" <<'PY'
 import json
 import os
 import sys
 from datetime import datetime, timezone
 
-path, stage, attempt, contract, environment, tmpdir, descriptor, gpu, argv = sys.argv[1:]
+(
+    path, stage, attempt, contract, environment, build_source, preflight_manifest,
+    preflight_manifest_sha256, tmpdir, descriptor, gpu, argv,
+) = sys.argv[1:]
 value = {
     "schema_version": 1,
     "started_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -107,6 +116,9 @@ value = {
     "attempt_dir": attempt,
     "contract": contract,
     "environment": environment,
+    "build_source": build_source,
+    "cuda_build_preflight_manifest": preflight_manifest,
+    "cuda_build_preflight_manifest_sha256": preflight_manifest_sha256,
     "tmpdir": tmpdir,
     "slurm_job_id": os.environ["SLURM_JOB_ID"],
     "slurm_export_mode": os.environ.get("SLURM_EXPORT_ENV"),
@@ -124,10 +136,6 @@ PY
 echo "state=RUNNING job_id=$SLURM_JOB_ID stage=$stage"
 echo "gpu=$gpu_inventory"
 
-if [[ ! -d "$environment" ]]; then
-  "$micromamba" create -y -p "$environment" --clone "$environment_source"
-fi
-
 PATH=$environment/bin:$PATH
 export PATH
 HF_HOME=$cache_root/huggingface
@@ -138,29 +146,16 @@ TOKENIZERS_PARALLELISM=false
 PYTHONHASHSEED=20260910
 TORCH_CUDA_ARCH_LIST=8.6
 MAX_JOBS=8
+CUDA_HOME=$environment
+cuda_target_lib=$environment/targets/x86_64-linux/lib
+torch_cuda_lib=$environment/lib/python3.10/site-packages/nvidia/cuda_runtime/lib
+LD_LIBRARY_PATH=$environment/lib:$cuda_target_lib:$torch_cuda_lib:${LD_LIBRARY_PATH:-}
+PYTHONPATH=$build_source:$build_source/third-party/fast-hadamard-transform
 export HF_HOME HF_HUB_CACHE PIP_CACHE_DIR TORCH_EXTENSIONS_DIR TOKENIZERS_PARALLELISM
-export PYTHONHASHSEED TORCH_CUDA_ARCH_LIST MAX_JOBS
+export PYTHONHASHSEED TORCH_CUDA_ARCH_LIST MAX_JOBS CUDA_HOME LD_LIBRARY_PATH PYTHONPATH
 
-if ! command -v nvcc >/dev/null 2>&1; then
-  "$micromamba" install -y -p "$environment" -c nvidia cuda-nvcc=12.1 cuda-cudart-dev=12.1
-fi
-CUDA_HOME=$(dirname "$(dirname "$(readlink -f "$(command -v nvcc)")")")
-export CUDA_HOME
-
-"$environment/bin/python" -m pip install \
-  --disable-pip-version-check \
-  -r "$stage/requirements-phase0b.txt"
-"$environment/bin/python" -m pip install --disable-pip-version-check ninja==1.11.1.4
 cd "$stage"
-"$environment/bin/python" -m pip install --disable-pip-version-check --no-build-isolation -e .
-
-flash_attention_status=already_present
-if ! "$environment/bin/python" -c 'import flash_attn' >/dev/null 2>&1; then
-  flash_attention_status=install_failed_optional
-  if "$environment/bin/python" -m pip install --disable-pip-version-check --no-build-isolation flash-attn==2.6.3; then
-    flash_attention_status=installed
-  fi
-fi
+flash_attention_status=preflight_verified
 export E0_FLASH_ATTENTION_STATUS=$flash_attention_status
 
 "$environment/bin/python" -m pip freeze > "$attempt_dir/environment-freeze.txt"
@@ -183,17 +178,21 @@ PY
 
 export RESEARCH_REPRO_STAGED_DIR=$stage
 export RESEARCH_REPRO_SOURCE_REPO=/data/vision/torralba/u/kwen1/absorbable-transformer-symmetries/baseline-src
-export E0_ENVIRONMENT_ID=quarot-e0-py310-cu121-r2
+export E0_ENVIRONMENT_ID=quarot-e0-py310-cu121-r3
 experiment_started=true
 "$environment/bin/python" "$stage/e0/scripts/e0_benchmark.py" "$contract" "$results_dir"
+gate_decision=$("$environment/bin/python" "$stage/e0/scripts/finalize_e0.py" \
+  "$contract" "$results_dir" "$preflight_manifest" \
+  "$stage/REPRODUCIBILITY_METADATA.json")
 
-python3 - "$final_state" "$results_dir" "$environment" "$flash_attention_status" <<'PY'
+python3 - "$final_state" "$results_dir" "$environment" "$flash_attention_status" \
+  "$gate_decision" <<'PY'
 import json
 import os
 import sys
 from datetime import datetime, timezone
 
-path, results, environment, flash_status = sys.argv[1:]
+path, results, environment, flash_status, gate_decision = sys.argv[1:]
 value = {
     "schema_version": 1,
     "completed_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -201,6 +200,7 @@ value = {
     "results_dir": results,
     "environment": environment,
     "flash_attention_status": flash_status,
+    "gate_decision": gate_decision,
     "slurm_job_id": os.environ["SLURM_JOB_ID"],
     "slurm_export_mode": os.environ.get("SLURM_EXPORT_ENV"),
     "phase_after_run": "E0_STOP",
