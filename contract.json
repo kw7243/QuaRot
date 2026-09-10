@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "contract_id": "e0-quarot-packed-mlp-hadamard-removal-v1",
+  "frozen_at_utc": "2026-09-10T00:14:25Z",
+  "authority": {
+    "brief": "/home/ubuntu/firstmate/data/absorbable-transformer-symmetries-r1/brief.md",
+    "current_index": "/home/ubuntu/firstmate/data/research-plans/CURRENT.md",
+    "plan": "/home/ubuntu/firstmate/data/research-plans/idea4_absorbable_symmetry_experimental_plan_v2.md",
+    "phase": "E0",
+    "role": "C"
+  },
+  "source": {
+    "repository": "https://github.com/spcl/QuaRot",
+    "official_base_commit": "5008669b08c1f11f9b64d52d16fddd47ca754c5a",
+    "retained_adapter_parent": "921b912bb8f6b7f16122d55a9e769e4e8b2c6f44",
+    "research_branch_tip_before_v2_e0": "ffb99eca8dbea4929b0e368c9184df89c322efeb",
+    "stage_commit": "recorded_by_run_manifest_after_the_frozen_harness_is_committed"
+  },
+  "model": {
+    "architecture_id": "meta-llama/Llama-2-7b-hf",
+    "architecture_basis": "model_configs and supported_models in QuaRot e2e at the pinned official commit",
+    "checkpoint_revision": null,
+    "checkpoint_weights_loaded": false,
+    "execution_only_reason": "E0 measures operation cost and explicitly treats C as a no-transform execution counterfactual; it does not measure quality.",
+    "tokenizer": null,
+    "mlp": {
+      "variant": "bias-free SwiGLU",
+      "hidden_size": 4096,
+      "intermediate_size": 11008,
+      "projections": [
+        "gate_proj",
+        "up_proj",
+        "down_proj"
+      ]
+    },
+    "attention": {
+      "variant": "Llama multi-head causal self-attention",
+      "layers": 32,
+      "query_heads": 32,
+      "key_value_heads": 32,
+      "head_dimension": 128,
+      "treatment": "identical in R and C"
+    }
+  },
+  "operating_points": [
+    {
+      "id": "R",
+      "role": "strong_reference",
+      "mlp_pre_down_transform": "QuaRot generalized orthonormal Hadamard over the 11008-wide SwiGLU output",
+      "extra_online_operations": [
+        "fast_hadamard_transform.hadamard_transform",
+        "172x172 residual Hadamard multiplication"
+      ]
+    },
+    {
+      "id": "C",
+      "role": "cheaper_execution_counterfactual",
+      "mlp_pre_down_transform": "identity",
+      "extra_online_operations": []
+    }
+  ],
+  "controlled_difference": "Only the online pre-down-projection MLP transform changes. Packed weights, bit widths, shapes, scale generation, clipping, rounding, accumulator types, attention, and KV treatment are held fixed for timing.",
+  "quantization": {
+    "weights": {
+      "format": "signed_int4_packed_two_per_uint8",
+      "mathematical_axis": "one symmetric scale per output channel over the complete input-feature reduction axis",
+      "stored_tensor_axis": "packed input-feature axis of [out_features, in_features/2]",
+      "scale_format": "float16",
+      "zero_point": null,
+      "clipping": "[-8, 7]",
+      "rounding": "torch.round for exported weights; execution fixture uses already-packed valid codes",
+      "remaining_high_precision": "float16 per-output-channel scales"
+    },
+    "activations": {
+      "format": "signed_int4_packed_two_per_uint8",
+      "mathematical_axis": "one dynamic symmetric scale per token over the complete last feature dimension",
+      "stored_tensor_axis": "packed last feature axis",
+      "scale_format": "float16",
+      "zero_point": null,
+      "clipping": "[-8, 7]",
+      "rounding": "CUDA round-to-nearest via __half2int_rn",
+      "scale_rule": "float16(max(abs(x), last_axis) / 7)",
+      "scale_location": "computed online immediately before each packed linear"
+    },
+    "kv": {
+      "format": "QuaRot asymmetric packed int4 cache when the official end-to-end decode path runs",
+      "scale_format": "float16 scale and zero offset",
+      "treatment": "identical in R and C"
+    },
+    "accumulator": "int32 CUTLASS tensor-core GEMM",
+    "output": "float16 after scale product dequantization",
+    "group_size": "full reduction axis; this is the maintained packed QuaRot execution geometry, not the historical fake-quant g128 contract"
+  },
+  "implementation": {
+    "packed_layout": {
+      "activation": "row-major uint8, adjacent input features packed into low/high nibbles",
+      "weight": "uint8 [out_features, in_features/2], consumed as CUTLASS int4 column-major operand B"
+    },
+    "exporter": "e2e/checkpoint_utils/quantize_llama_checkpoint.py at the pinned repository lineage; not invoked in execution-only E0",
+    "kernels": {
+      "activation_pack": "quarot._CUDA.sym_quant",
+      "gemm": "quarot._CUDA.matmul using cutlass::gemm::device::Gemm int4/int4/int32",
+      "dequantization": "quarot._CUDA.sym_dequant",
+      "online_transform": "fast_hadamard_transform.hadamard_transform plus QuaRot had172 residual factor"
+    },
+    "custom_kernel_work": false,
+    "target_gpu": "NVIDIA RTX 3090 (SM86, 24 GiB)",
+    "gpu_selection_reason": "smallest currently eligible QuaRot-compiled architecture with enough memory for the packed 7B decode counterfactual and batch-16 context cache",
+    "software": {
+      "python": "3.10",
+      "torch": "2.4.1+cu121",
+      "cuda_runtime": "12.1",
+      "transformers": "4.44.2",
+      "cutlass_submodule": "ffa34e70756b0bc744e1dfcc115b5a991a68f132",
+      "fast_hadamard_transform_submodule": "4ea722e434e3d4f2a14522341959ebdbe62be2de"
+    }
+  },
+  "workloads": {
+    "primary": "decode_b1_ctx2048_step1",
+    "points": [
+      {
+        "id": "decode_b1_ctx2048_step1",
+        "mlp_tokens": 1,
+        "batch": 1,
+        "sequence_or_context": 2048
+      },
+      {
+        "id": "decode_b16_ctx2048_step1",
+        "mlp_tokens": 16,
+        "batch": 16,
+        "sequence_or_context": 2048,
+        "condition": "run if memory permits"
+      },
+      {
+        "id": "prefill_b1_s2048",
+        "mlp_tokens": 2048,
+        "batch": 1,
+        "sequence_or_context": 2048
+      }
+    ]
+  },
+  "timing": {
+    "paired_samples": 40,
+    "minimum_accepted_pairs": 30,
+    "warmup_pairs": 10,
+    "configuration_order": "randomized independently per pair with seed 20260910",
+    "timer": "CUDA events with synchronization",
+    "minimum_target_duration_per_configuration_sample_ms": 5.0,
+    "profiler_traces_in_final_samples": false,
+    "concurrent_jobs": false
+  },
+  "storage": {
+    "research_root": "/data/vision/torralba/u/kwen1/absorbable-transformer-symmetries",
+    "scratch_root": "/data/scratch-fast/kwen1/absorbable-transformer-symmetries",
+    "staging_parent": "/data/scratch-fast/kwen1/absorbable-transformer-symmetries/staging",
+    "environment": "/data/scratch-fast/kwen1/absorbable-transformer-symmetries/envs/quarot-e0-py310-cu121-r1",
+    "cache": "/data/scratch-fast/kwen1/absorbable-transformer-symmetries/cache/e0",
+    "tmpdir": "allocation-local SLURM_TMPDIR or a per-job /tmp directory"
+  },
+  "interpretation": {
+    "quality_claim_allowed": false,
+    "c_is_accurate_checkpoint": false,
+    "attractive_projected_end_to_end_improvement": 0.05,
+    "deprioritize_below_projected_end_to_end_improvement": 0.02,
+    "phase_after_run": "stop at E0 decision; E1 remains closed"
+  }
+}
