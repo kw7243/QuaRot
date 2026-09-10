@@ -38,6 +38,10 @@ def main() -> int:
         text=True,
     ).strip()
     require(stage_commit == value["source"]["commit"], "preflight/stage commit mismatch")
+    require(
+        arguments.stage.resolve() == Path(value["source"]["path"]).resolve(),
+        "GPU stage differs from the CPU preflight stage",
+    )
     require(value["cuda"]["release"] == "12.1", "unexpected CUDA release")
     require(value["python"]["torch"] == "2.4.1+cu121", "unexpected PyTorch build")
     for name, artifact in value["artifacts"].items():

@@ -9,13 +9,14 @@
 set -Eeuo pipefail
 
 # This is a scheduler-tracked CPU-only environment/build proof. It is submitted
-# with --export=NIL and must complete before a fresh E0 repository stage exists.
+# with --export=NIL from a fresh validated stage. Compilation happens in an
+# attempt-local copy so the stage remains immutable for the later GPU command.
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 LC_ALL=C.UTF-8
 LANG=C.UTF-8
 research_root=/data/vision/torralba/u/kwen1/absorbable-transformer-symmetries
 scratch_root=/data/scratch-fast/kwen1/absorbable-transformer-symmetries
-source_repo=${1:?clean retained QuaRot source required}
+source_repo=${1:?validated immutable QuaRot stage required}
 expected_commit=${2:?expected source commit required}
 attempt_dir=${3:?durable preflight attempt directory required}
 manifest=${4:?new durable preflight manifest required}
@@ -71,12 +72,13 @@ trap 'write_failure $?' EXIT
 [[ "${SLURM_EXPORT_ENV:-}" == "NIL" ]]
 [[ -z "${SLURM_JOB_GPUS:-}" ]]
 [[ -z "${SLURM_GPUS:-}" ]]
-[[ "$source_repo" == "$research_root/"* ]]
+[[ "$source_repo" == "$scratch_root/staging/"* ]]
 [[ "$attempt_dir" == "$research_root/preflight-attempts/"* ]]
 [[ "$manifest" == "$research_root/manifests/"* ]]
 [[ "$environment" == "$scratch_root/envs/"* ]]
 [[ "$build_root" == "$scratch_root/preflight-builds/"* ]]
 [[ -d "$source_repo/.git" ]]
+[[ -f "$source_repo/REPRODUCIBILITY_METADATA.json" ]]
 [[ -d "$attempt_dir" ]]
 [[ ! -e "$manifest" ]]
 [[ ! -e "$environment" ]]
@@ -97,7 +99,8 @@ source_tree=$(git --no-optional-locks -C "$source_repo" rev-parse 'HEAD^{tree}')
 source_status=$(git --no-optional-locks -C "$source_repo" status --porcelain --untracked-files=all)
 source_submodules=$(git --no-optional-locks -C "$source_repo" submodule status --recursive)
 [[ "$source_commit" == "$expected_commit" ]]
-[[ -z "$source_status" ]]
+[[ "$source_status" == "?? REPRODUCIBILITY_METADATA.json" ]]
+[[ "$(pwd -P)" == "$(realpath "$source_repo")" ]]
 if grep -Eq '^[-+U]' <<<"$source_submodules"; then
   echo "source submodule state is incomplete or mismatched" >&2
   exit 3
@@ -119,7 +122,12 @@ value = {
     "schema_version": 1,
     "started_at_utc": datetime.now(timezone.utc).isoformat(),
     "status": "RUNNING",
-    "source": {"path": source, "commit": commit, "tree": tree},
+    "source": {
+        "path": source,
+        "commit": commit,
+        "tree": tree,
+        "stage_status_except_metadata": "clean",
+    },
     "attempt_dir": attempt,
     "expected_manifest": manifest,
     "environment": environment,
@@ -137,7 +145,7 @@ with open(path, "x", encoding="utf-8") as stream:
     stream.write("\n")
 PY
 
-echo "state=RUNNING job_id=$SLURM_JOB_ID source=$source_repo"
+echo "state=RUNNING job_id=$SLURM_JOB_ID stage=$source_repo"
 
 mkdir -p "$build_source"
 rsync -a --no-perms --no-owner --no-group \
@@ -338,7 +346,12 @@ value = {
     "schema_version": 1,
     "created_at_utc": datetime.now(timezone.utc).isoformat(),
     "status": "PASS",
-    "source": {"path": source, "commit": commit, "tree": tree, "status": "clean"},
+    "source": {
+        "path": source,
+        "commit": commit,
+        "tree": tree,
+        "stage_status_except_metadata": "clean",
+    },
     "build_source": build_source,
     "environment": environment,
     "cuda": {
