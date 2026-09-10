@@ -79,10 +79,12 @@ trap 'write_failure $?' EXIT
 [[ -f "$preflight_manifest" ]]
 
 mkdir -p "$tmp_root" "$cache_root/huggingface" "$cache_root/pip" "$cache_root/torch_extensions"
-HOME=$tmp_root/home
 TMPDIR=$tmp_root/tmp
-mkdir -p "$HOME" "$TMPDIR"
-export HOME TMPDIR
+XDG_CACHE_HOME=$tmp_root/xdg-cache
+XDG_CONFIG_HOME=$tmp_root/xdg-config
+PYTHONUSERBASE=$tmp_root/python-user
+mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$PYTHONUSERBASE"
+export TMPDIR XDG_CACHE_HOME XDG_CONFIG_HOME PYTHONUSERBASE
 
 preflight_values=$(python3 "$stage/e0/scripts/verify_cuda_preflight.py" \
   "$preflight_manifest" "$stage" "$attempt_dir/preflight-verification.json")

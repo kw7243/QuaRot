@@ -87,10 +87,12 @@ trap 'write_failure $?' EXIT
 [[ -d "$environment_source" ]]
 
 mkdir -m 700 "$tmp_root"
-HOME=$tmp_root/home
 TMPDIR=$tmp_root/tmp
-mkdir -m 700 "$HOME" "$TMPDIR"
-export HOME TMPDIR
+XDG_CACHE_HOME=$tmp_root/xdg-cache
+XDG_CONFIG_HOME=$tmp_root/xdg-config
+PYTHONUSERBASE=$tmp_root/python-user
+mkdir -m 700 "$TMPDIR" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$PYTHONUSERBASE"
+export TMPDIR XDG_CACHE_HOME XDG_CONFIG_HOME PYTHONUSERBASE
 
 job_descriptor=$(scontrol show job -o "$SLURM_JOB_ID")
 [[ "$job_descriptor" != *"gres/gpu"* ]]
