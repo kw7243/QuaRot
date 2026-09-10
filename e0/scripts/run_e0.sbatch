@@ -19,7 +19,7 @@ stage=${1:?validated stage required}
 attempt_dir=${2:?durable attempt directory required}
 contract=${3:?staged contract required}
 results_dir=$attempt_dir/results
-environment=$scratch_root/envs/quarot-e0-py310-cu121-r1
+environment=$scratch_root/envs/quarot-e0-py310-cu121-r2
 environment_source=$scratch_root/envs/quarot-phase0b-py310-cu121-r1
 micromamba=/data/scratch-fast/kwen1/micromamba/bin/micromamba
 mamba_root=/data/scratch-fast/kwen1/micromamba/root
@@ -147,6 +147,9 @@ fi
 CUDA_HOME=$(dirname "$(dirname "$(readlink -f "$(command -v nvcc)")")")
 export CUDA_HOME
 
+"$environment/bin/python" -m pip install \
+  --disable-pip-version-check \
+  -r "$stage/requirements-phase0b.txt"
 "$environment/bin/python" -m pip install --disable-pip-version-check ninja==1.11.1.4
 cd "$stage"
 "$environment/bin/python" -m pip install --disable-pip-version-check --no-build-isolation -e .
@@ -180,7 +183,7 @@ PY
 
 export RESEARCH_REPRO_STAGED_DIR=$stage
 export RESEARCH_REPRO_SOURCE_REPO=/data/vision/torralba/u/kwen1/absorbable-transformer-symmetries/baseline-src
-export E0_ENVIRONMENT_ID=quarot-e0-py310-cu121-r1
+export E0_ENVIRONMENT_ID=quarot-e0-py310-cu121-r2
 experiment_started=true
 "$environment/bin/python" "$stage/e0/scripts/e0_benchmark.py" "$contract" "$results_dir"
 
