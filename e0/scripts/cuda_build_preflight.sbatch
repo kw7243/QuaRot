@@ -169,8 +169,8 @@ rsync -rlnic \
   "$source_repo/" "$build_source/" > "$attempt_dir/source-content-before-build.delta"
 [[ ! -s "$attempt_dir/source-content-before-build.delta" ]]
 
-"$micromamba" create -y -p "$environment" --clone "$environment_source"
-"$micromamba" install -y -p "$environment" --override-channels \
+"$micromamba" --no-rc create -y -p "$environment" --clone "$environment_source"
+"$micromamba" --no-rc install -y -p "$environment" --override-channels \
   -c nvidia/label/cuda-12.1.1 -c conda-forge \
   cuda-nvcc=12.1.105=0 \
   cuda-cudart=12.1.105=0 \
