@@ -25,26 +25,35 @@ build_root=${6:?fresh scratch build root required}
 environment_source=$scratch_root/envs/quarot-phase0b-py310-cu121-r1
 build_source=$build_root/source
 micromamba=/data/scratch-fast/kwen1/micromamba/bin/micromamba
-mamba_root=/data/scratch-fast/kwen1/micromamba/root
+mamba_state=$scratch_root/mamba-state/${environment##*/}
+mamba_root=$mamba_state/root
+mamba_pkgs=$mamba_state/pkgs
+mamba_envs=$scratch_root/envs
 running_state=$attempt_dir/state.running.json
 final_state=$attempt_dir/state.final.json
 failure_command=unknown
 tmp_root=/tmp/absym-e0-preflight-${SLURM_JOB_ID:?SLURM_JOB_ID required}
 export PATH LC_ALL LANG
 MAMBA_ROOT_PREFIX=$mamba_root
-export MAMBA_ROOT_PREFIX
+CONDA_PKGS_DIRS=$mamba_pkgs
+CONDA_ENVS_PATH=$mamba_envs
+export MAMBA_ROOT_PREFIX CONDA_PKGS_DIRS CONDA_ENVS_PATH
 
 write_failure() {
   local return_code=$1
   trap - EXIT
   if [[ ! -e "$final_state" ]]; then
-    python3 - "$final_state" "$return_code" "$failure_command" "$environment" "$build_root" <<'PY'
+    python3 - "$final_state" "$return_code" "$failure_command" "$environment" \
+      "$build_root" "$mamba_root" "$mamba_pkgs" "$mamba_envs" <<'PY'
 import json
 import os
 import sys
 from datetime import datetime, timezone
 
-path, return_code, command, environment, build_root = sys.argv[1:]
+(
+    path, return_code, command, environment, build_root,
+    mamba_root, mamba_pkgs, mamba_envs,
+) = sys.argv[1:]
 value = {
     "schema_version": 1,
     "completed_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -53,6 +62,11 @@ value = {
     "failure_command": command,
     "environment": environment,
     "build_root": build_root,
+    "mamba_state": {
+        "root_prefix": mamba_root,
+        "package_cache": mamba_pkgs,
+        "envs_directory": mamba_envs,
+    },
     "slurm_job_id": os.environ["SLURM_JOB_ID"],
     "slurm_export_mode": os.environ.get("SLURM_EXPORT_ENV"),
     "gpu_requested": False,
@@ -83,9 +97,11 @@ trap 'write_failure $?' EXIT
 [[ ! -e "$manifest" ]]
 [[ ! -e "$environment" ]]
 [[ ! -e "$build_root" ]]
+[[ ! -e "$mamba_state" ]]
 [[ -x "$micromamba" ]]
 [[ -d "$environment_source" ]]
 
+mkdir -m 700 -p "$mamba_root" "$mamba_pkgs"
 mkdir -m 700 "$tmp_root"
 TMPDIR=$tmp_root/tmp
 XDG_CACHE_HOME=$tmp_root/xdg-cache
@@ -109,8 +125,8 @@ if grep -Eq '^[-+U]' <<<"$source_submodules"; then
 fi
 
 python3 - "$running_state" "$source_repo" "$source_commit" "$source_tree" \
-  "$attempt_dir" "$manifest" "$environment" "$build_root" "$TMPDIR" \
-  "$job_descriptor" "$*" <<'PY'
+  "$attempt_dir" "$manifest" "$environment" "$build_root" "$mamba_root" \
+  "$mamba_pkgs" "$mamba_envs" "$TMPDIR" "$job_descriptor" "$*" <<'PY'
 import json
 import os
 import sys
@@ -118,7 +134,7 @@ from datetime import datetime, timezone
 
 (
     path, source, commit, tree, attempt, manifest, environment, build_root,
-    tmpdir, descriptor, argv,
+    mamba_root, mamba_pkgs, mamba_envs, tmpdir, descriptor, argv,
 ) = sys.argv[1:]
 value = {
     "schema_version": 1,
@@ -134,6 +150,11 @@ value = {
     "expected_manifest": manifest,
     "environment": environment,
     "build_root": build_root,
+    "mamba_state": {
+        "root_prefix": mamba_root,
+        "package_cache": mamba_pkgs,
+        "envs_directory": mamba_envs,
+    },
     "tmpdir": tmpdir,
     "slurm_job_id": os.environ["SLURM_JOB_ID"],
     "slurm_export_mode": os.environ.get("SLURM_EXPORT_ENV"),
@@ -169,8 +190,27 @@ rsync -rlnic \
   "$source_repo/" "$build_source/" > "$attempt_dir/source-content-before-build.delta"
 [[ ! -s "$attempt_dir/source-content-before-build.delta" ]]
 
-"$micromamba" --no-rc create -y -p "$environment" --clone "$environment_source"
-"$micromamba" --no-rc install -y -p "$environment" --override-channels \
+"$micromamba" --no-rc --root-prefix "$mamba_root" info --json \
+  > "$attempt_dir/micromamba-info-before-create.json"
+"$environment_source/bin/python" - "$attempt_dir/micromamba-info-before-create.json" \
+  "$mamba_pkgs" "$mamba_envs" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path, expected_pkgs, expected_envs = sys.argv[1:]
+value = json.loads(Path(path).read_text())
+assert value["package cache"] == [expected_pkgs], value["package cache"]
+assert value["envs directories"][0] == expected_envs, value["envs directories"]
+assert all(not item.startswith("/afs/") for item in value["package cache"])
+assert all(not item.startswith("/afs/") for item in value["envs directories"])
+assert value.get("populated config files", []) == []
+PY
+
+"$micromamba" --no-rc --root-prefix "$mamba_root" create \
+  -y -p "$environment" --clone "$environment_source"
+"$micromamba" --no-rc --root-prefix "$mamba_root" install \
+  -y -p "$environment" --override-channels \
   -c nvidia/label/cuda-12.1.1 -c conda-forge \
   cuda-nvcc=12.1.105=0 \
   cuda-cudart=12.1.105=0 \
@@ -201,7 +241,8 @@ mkdir -p "$PIP_CACHE_DIR" "$TORCH_EXTENSIONS_DIR"
   ninja==1.11.1.4 packaging==24.1 \
   > "$attempt_dir/python-build-requirements.log" 2>&1
 
-"$micromamba" list -p "$environment" --json > "$attempt_dir/conda-packages.json"
+"$micromamba" --no-rc --root-prefix "$mamba_root" list \
+  -p "$environment" --json > "$attempt_dir/conda-packages.json"
 "$environment/bin/python" - "$attempt_dir/conda-packages.json" <<'PY'
 import json
 import sys
@@ -341,6 +382,7 @@ files = {
     "hadamard_extension": hadamard_extension,
     "flash_attention_extension": flash_attention_extension,
     "conda_packages": str(Path(attempt) / "conda-packages.json"),
+    "micromamba_info": str(Path(attempt) / "micromamba-info-before-create.json"),
     "pip_freeze": str(Path(attempt) / "pip-freeze.txt"),
     "python_imports": str(Path(attempt) / "python-imports.txt"),
 }
