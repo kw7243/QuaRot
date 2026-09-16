@@ -29,6 +29,9 @@ mamba_state=$scratch_root/mamba-state/${environment##*/}
 mamba_root=$mamba_state/root
 mamba_pkgs=$mamba_state/pkgs
 mamba_envs=$scratch_root/envs
+environment_registry=/afs/csail.mit.edu/u/k/kwen1/.conda/environments.txt
+registry_sha_before=unrecorded
+registry_stat_before=unrecorded
 running_state=$attempt_dir/state.running.json
 final_state=$attempt_dir/state.final.json
 failure_command=unknown
@@ -36,15 +39,17 @@ tmp_root=/tmp/absym-e0-preflight-${SLURM_JOB_ID:?SLURM_JOB_ID required}
 export PATH LC_ALL LANG
 MAMBA_ROOT_PREFIX=$mamba_root
 CONDA_PKGS_DIRS=$mamba_pkgs
-CONDA_ENVS_PATH=$mamba_envs
-export MAMBA_ROOT_PREFIX CONDA_PKGS_DIRS CONDA_ENVS_PATH
+CONDA_ENVS_DIRS=$mamba_envs
+unset CONDA_ENVS_PATH
+export MAMBA_ROOT_PREFIX CONDA_PKGS_DIRS CONDA_ENVS_DIRS
 
 write_failure() {
   local return_code=$1
   trap - EXIT
   if [[ ! -e "$final_state" ]]; then
     python3 - "$final_state" "$return_code" "$failure_command" "$environment" \
-      "$build_root" "$mamba_root" "$mamba_pkgs" "$mamba_envs" <<'PY'
+      "$build_root" "$mamba_root" "$mamba_pkgs" "$mamba_envs" \
+      "$environment_registry" "$registry_sha_before" "$registry_stat_before" <<'PY'
 import json
 import os
 import sys
@@ -52,7 +57,7 @@ from datetime import datetime, timezone
 
 (
     path, return_code, command, environment, build_root,
-    mamba_root, mamba_pkgs, mamba_envs,
+    mamba_root, mamba_pkgs, mamba_envs, registry, registry_sha, registry_stat,
 ) = sys.argv[1:]
 value = {
     "schema_version": 1,
@@ -67,6 +72,12 @@ value = {
         "package_cache": mamba_pkgs,
         "envs_directory": mamba_envs,
     },
+    "environment_build_strategy": "bootstrap valid prefix, then micromamba install",
+    "afs_environment_registry": {
+        "path": registry,
+        "sha256_before": registry_sha,
+        "stat_before": registry_stat,
+    },
     "slurm_job_id": os.environ["SLURM_JOB_ID"],
     "slurm_export_mode": os.environ.get("SLURM_EXPORT_ENV"),
     "gpu_requested": False,
@@ -78,6 +89,19 @@ with open(path, "x", encoding="utf-8") as stream:
 PY
   fi
   exit "$return_code"
+}
+
+assert_registry_unchanged() {
+  local label=$1
+  local current_sha current_stat
+  current_sha=$(sha256sum "$environment_registry" | awk '{print $1}')
+  current_stat=$(stat -c '%d:%i:%s:%Y:%a:%U:%G' "$environment_registry")
+  printf '%s\n' "$current_sha" > "$attempt_dir/afs-registry.sha256.$label"
+  printf '%s\n' "$current_stat" > "$attempt_dir/afs-registry.stat.$label"
+  cp -p "$environment_registry" "$attempt_dir/afs-registry.$label.txt"
+  [[ "$current_sha" == "$registry_sha_before" ]]
+  [[ "$current_stat" == "$registry_stat_before" ]]
+  cmp -s "$attempt_dir/afs-registry.before.txt" "$attempt_dir/afs-registry.$label.txt"
 }
 
 trap 'failure_command=$BASH_COMMAND' ERR
@@ -100,8 +124,10 @@ trap 'write_failure $?' EXIT
 [[ ! -e "$mamba_state" ]]
 [[ -x "$micromamba" ]]
 [[ -d "$environment_source" ]]
+[[ -r "$environment_registry" ]]
 
-mkdir -m 700 -p "$mamba_root" "$mamba_pkgs"
+mkdir -p "$mamba_root" "$mamba_pkgs"
+chmod 700 "$mamba_state" "$mamba_root" "$mamba_pkgs"
 mkdir -m 700 "$tmp_root"
 TMPDIR=$tmp_root/tmp
 XDG_CACHE_HOME=$tmp_root/xdg-cache
@@ -109,6 +135,12 @@ XDG_CONFIG_HOME=$tmp_root/xdg-config
 PYTHONUSERBASE=$tmp_root/python-user
 mkdir -m 700 "$TMPDIR" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$PYTHONUSERBASE"
 export TMPDIR XDG_CACHE_HOME XDG_CONFIG_HOME PYTHONUSERBASE
+
+cp -p "$environment_registry" "$attempt_dir/afs-registry.before.txt"
+registry_sha_before=$(sha256sum "$environment_registry" | awk '{print $1}')
+registry_stat_before=$(stat -c '%d:%i:%s:%Y:%a:%U:%G' "$environment_registry")
+printf '%s\n' "$registry_sha_before" > "$attempt_dir/afs-registry.sha256.before"
+printf '%s\n' "$registry_stat_before" > "$attempt_dir/afs-registry.stat.before"
 
 job_descriptor=$(scontrol show job -o "$SLURM_JOB_ID")
 [[ "$job_descriptor" != *"gres/gpu"* ]]
@@ -126,7 +158,8 @@ fi
 
 python3 - "$running_state" "$source_repo" "$source_commit" "$source_tree" \
   "$attempt_dir" "$manifest" "$environment" "$build_root" "$mamba_root" \
-  "$mamba_pkgs" "$mamba_envs" "$TMPDIR" "$job_descriptor" "$*" <<'PY'
+  "$mamba_pkgs" "$mamba_envs" "$TMPDIR" "$environment_registry" \
+  "$registry_sha_before" "$registry_stat_before" "$job_descriptor" "$*" <<'PY'
 import json
 import os
 import sys
@@ -134,7 +167,8 @@ from datetime import datetime, timezone
 
 (
     path, source, commit, tree, attempt, manifest, environment, build_root,
-    mamba_root, mamba_pkgs, mamba_envs, tmpdir, descriptor, argv,
+    mamba_root, mamba_pkgs, mamba_envs, tmpdir, registry, registry_sha,
+    registry_stat, descriptor, argv,
 ) = sys.argv[1:]
 value = {
     "schema_version": 1,
@@ -154,6 +188,12 @@ value = {
         "root_prefix": mamba_root,
         "package_cache": mamba_pkgs,
         "envs_directory": mamba_envs,
+    },
+    "environment_build_strategy": "bootstrap valid prefix, then micromamba install",
+    "afs_environment_registry": {
+        "path": registry,
+        "sha256_before": registry_sha,
+        "stat_before": registry_stat,
     },
     "tmpdir": tmpdir,
     "slurm_job_id": os.environ["SLURM_JOB_ID"],
@@ -191,8 +231,8 @@ rsync -rlnic \
 [[ ! -s "$attempt_dir/source-content-before-build.delta" ]]
 
 "$micromamba" --no-rc --root-prefix "$mamba_root" info --json \
-  > "$attempt_dir/micromamba-info-before-create.json"
-"$environment_source/bin/python" - "$attempt_dir/micromamba-info-before-create.json" \
+  > "$attempt_dir/micromamba-info-before-install.json"
+"$environment_source/bin/python" - "$attempt_dir/micromamba-info-before-install.json" \
   "$mamba_pkgs" "$mamba_envs" <<'PY'
 import json
 import sys
@@ -207,8 +247,41 @@ assert all(not item.startswith("/afs/") for item in value["envs directories"])
 assert value.get("populated config files", []) == []
 PY
 
-"$micromamba" --no-rc --root-prefix "$mamba_root" create \
-  -y -p "$environment" --clone "$environment_source"
+"$micromamba" --no-rc --root-prefix "$mamba_root" list \
+  --no-pip --explicit --sha256 -p "$environment_source" \
+  > "$attempt_dir/environment-source-conda-explicit.raw.txt"
+"$environment_source/bin/python" - \
+  "$attempt_dir/environment-source-conda-explicit.raw.txt" \
+  "$attempt_dir/environment-source-conda-explicit.txt" <<'PY'
+import sys
+from pathlib import Path
+
+source, target = map(Path, sys.argv[1:])
+urls = [
+    line.strip()
+    for line in source.read_text(encoding="utf-8").splitlines()
+    if line.startswith(("https://", "http://", "file://"))
+]
+assert urls, "source environment produced no explicit conda package URLs"
+assert all("#" in url for url in urls), urls
+with target.open("x", encoding="utf-8") as stream:
+    stream.write("@EXPLICIT\n")
+    stream.write("\n".join(urls))
+    stream.write("\n")
+PY
+
+# Micromamba 2.8.1 has no CLI/config option for disabling environment
+# registration. Its create path always writes ~/.conda/environments.txt, while
+# install into an existing valid prefix does not. Bootstrap the same empty
+# prefix marker that create uses, then reconstruct the pinned conda packages
+# through the supported install command.
+mkdir -m 700 "$environment"
+mkdir -m 700 "$environment/conda-meta"
+: > "$environment/conda-meta/history"
+"$micromamba" --no-rc --root-prefix "$mamba_root" install \
+  -y -p "$environment" \
+  --file "$attempt_dir/environment-source-conda-explicit.txt"
+assert_registry_unchanged source-install
 "$micromamba" --no-rc --root-prefix "$mamba_root" install \
   -y -p "$environment" --override-channels \
   -c nvidia/label/cuda-12.1.1 -c conda-forge \
@@ -217,6 +290,7 @@ PY
   cuda-cudart-dev=12.1.105=0 \
   cuda-cudart-static=12.1.105=0 \
   cuda-cccl=12.1.109=0
+assert_registry_unchanged cuda-install
 
 PATH=$environment/bin:$PATH
 CUDA_HOME=$environment
@@ -243,6 +317,7 @@ mkdir -p "$PIP_CACHE_DIR" "$TORCH_EXTENSIONS_DIR"
 
 "$micromamba" --no-rc --root-prefix "$mamba_root" list \
   -p "$environment" --json > "$attempt_dir/conda-packages.json"
+assert_registry_unchanged final
 "$environment/bin/python" - "$attempt_dir/conda-packages.json" <<'PY'
 import json
 import sys
@@ -382,7 +457,10 @@ files = {
     "hadamard_extension": hadamard_extension,
     "flash_attention_extension": flash_attention_extension,
     "conda_packages": str(Path(attempt) / "conda-packages.json"),
-    "micromamba_info": str(Path(attempt) / "micromamba-info-before-create.json"),
+    "source_conda_explicit": str(Path(attempt) / "environment-source-conda-explicit.txt"),
+    "micromamba_info": str(Path(attempt) / "micromamba-info-before-install.json"),
+    "afs_registry_before": str(Path(attempt) / "afs-registry.before.txt"),
+    "afs_registry_after": str(Path(attempt) / "afs-registry.final.txt"),
     "pip_freeze": str(Path(attempt) / "pip-freeze.txt"),
     "python_imports": str(Path(attempt) / "python-imports.txt"),
 }
@@ -398,6 +476,7 @@ value = {
     },
     "build_source": build_source,
     "environment": environment,
+    "environment_build_strategy": "bootstrap valid prefix, then micromamba install",
     "cuda": {
         "release": "12.1",
         "nvcc": "12.1.105",
@@ -415,6 +494,7 @@ value = {
         "fast_hadamard_extension_build": "PASS",
         "flash_attention_install": "PASS",
         "imports_without_gpu": "PASS",
+        "afs_environment_registry_unchanged": "PASS",
     },
     "artifacts": {name: {"path": filename, "sha256": sha256(filename)} for name, filename in files.items()},
     "executor": {
