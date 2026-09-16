@@ -273,3 +273,26 @@ Sources will be appended as they are inspected. Secondary summaries are not evid
 - The exact-one CPU preflight allowance is consumed. The gate stays closed: no retry, GPU submission, R/C change, fallback, cancellation, requeue, E1 work, or experiment occurred. The smallest unexecuted repair is to set `--chdir` to the exact stage, but it was not run.
 - E0 never reached measurement. There are no retained R/C timing inputs for a valid table or plot. The frozen comparisons remain R versus C for `decode_b1_ctx2048_step1`, conditional `decode_b16_ctx2048_step1`, and `prefill_b1_s2048`, but this attempt produced none of those rows.
 - The expected PASS manifest remains absent. Separate immutable terminal record: `/data/vision/torralba/u/kwen1/absorbable-transformer-symmetries/manifests/e0-preflight-r3-20260914T182817Z-c0865a-terminal.json`, SHA-256 `1622c1c9af7e823044fc55c1ca62ea9a4a92b3ea346fb2aec8aab8ea765c8649`.
+
+## 2026-09-16 — corrected CPU preflight reached micromamba; GPU gate closed
+
+### Current state
+
+- Captain decision `corrected-preflight`, SHA-256 `8e83548157d789224c23cc20fc4e19de3c96ca6ef8f2c94cd0348b5ea46ac815`, authorized one new CPU-only attempt from the preserved immutable stage and one unchanged E0 GPU measurement only after a complete preflight PASS.
+- The prior failed job `1927348`, terminal record, and missing PASS manifest remain unchanged. The preserved stage still resolves to commit `4bc8433528cec54e6b0c32ce94bd755f80303e33`, tree `c6892dfc0662f8f74952b51566427d92fc9afe8e`, with only `REPRODUCIBILITY_METADATA.json` untracked.
+- Current Slurm inspection found `csail/tig-main/tig-cpu` and `vision-torralba-urops-meng/vision-torralba-interactive/vision-torralba-rtx3090` available, with zero matching live jobs. The scheduler test placed the CPU request on `groenig-2`.
+
+### Corrected preflight
+
+- Fresh attempt: `e0-preflight-r3-corrected-20260916T192229Z-fb5cd9`. Launch-plan SHA-256: `d0910826f46774c4af93b061f291c13f66f98ead5fc591c5663efe1f805d9ef4`.
+- Exactly one CPU preflight was submitted with one terminal owner and `sbatch --parsable --wait --no-requeue --export=NIL`. Job `1977465` used `csail/tig-main/tig-cpu`, eight CPUs, 24 GiB, and a 90-minute ceiling. Its working directory was the exact immutable stage.
+- `state.running.json` records the corrected `WorkDir` and matching source commit/tree. The stage guard passed, the attempt-local source copy completed, and `source-content-before-build.delta` was empty.
+- Job `1977465` failed `1:0` after `00:06:33` on `groenig-2`; allocated TRES were `billing=166,cpu=8,mem=24G,node=1`.
+
+### Failure and decision
+
+- Terminal command: `"$micromamba" --no-rc --root-prefix "$mamba_root" create -y -p "$environment" --clone "$environment_source"`.
+- Micromamba 2.8.1 reported `Permission denied` for `/afs/csail.mit.edu/u/k/kwen1/.conda/environments.txt`. Its pre-create report showed an empty populated-config list plus scratch-local root, package-cache, and environment directories. The `--no-rc` correction therefore worked for configuration loading but did not redirect libmamba's environment registry.
+- The fresh environment is only a partial prefix containing an empty `conda-meta/history`; the mamba state contains empty registry/cache scaffolding. The preserved 69 MiB attempt-local source copy exists, but no CUDA package install, extension build, Python import proof, or experiment ran.
+- This is a mechanical compute-environment failure, not scientific evidence. The authorized corrected CPU attempt is consumed. No retry, GPU submission, R/C change, fallback, requeue, cancellation, E1 work, or measurement occurred.
+- E0 produced no R/C timing rows. No scientific table or plot is valid. The reserved PASS manifest remains absent. Separate terminal record: `/data/vision/torralba/u/kwen1/absorbable-transformer-symmetries/manifests/e0-preflight-r3-corrected-20260916T192229Z-fb5cd9-terminal.json`, SHA-256 `2c7a6d508c33986c3a049bc68ea23b0e7f9b37b7b2c397abbd34e1b988b47da6`.
